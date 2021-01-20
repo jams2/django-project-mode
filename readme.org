@@ -1,0 +1,5 @@
+#+title: django-project-mode
+
+* django-project-mode
+
+Some helpers I use when working on django projects.
