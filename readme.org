@@ -1,5 +1,3 @@
-#+title: django-project-mode
-
-* django-project-mode
+#+title: prodji-mode
 
 Some helpers I use when working on django projects.
