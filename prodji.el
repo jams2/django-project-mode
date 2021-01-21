@@ -1,3 +1,4 @@
+(require 'cl-lib)
 (defvar prodji-docker-buffer nil)
 (defvar prodji-shell-buffer nil)
 (defvar prodji-project-root nil)
@@ -10,7 +11,15 @@ e.g. (concat-path \"/etc\" \"nginx.conf.d\") -> \"/etc/nginx.conf.d\""
   (reduce (lambda (a b) (expand-file-name b a)) parts))
 
 (defun prodji (preserve-buffers)
-  "Start working on a Python project. With prefix arg, preserve existing shell processes."
+  "Start work on a Django project.
+
+Requires a Python virtual environment created with
+virtualenvwrapper, with the project root set (this is stored in
+the .project file in the virtual environment directory, when the
+virtual environment is created with a -a flag). If a project is
+already active, stop its processes and kill their buffers.
+
+With prefix arg, preserve existing shell and server buffers."
   (interactive "P")
   (let ((venv-name (venv-read-name
 		    (if venv-current-name
@@ -45,8 +54,20 @@ e.g. (concat-path \"/etc\" \"nginx.conf.d\") -> \"/etc/nginx.conf.d\""
     (let ((kill-buffer-query-functions nil))
       (prodji-teardown-server preserve-buffers)
       (prodji-teardown-shell preserve-buffers)
+      (call-interactively 'prodji-kill-project-buffers)
       (setq prodji-project-root nil)
       (venv-deactivate))))
+
+(defun prodji-kill-project-buffers ()
+  (interactive)
+  (cl-loop
+   for buf in (buffer-list)
+   for file-name = (buffer-file-name buf)
+   do (when (and
+	     file-name
+	     (string-match-p prodji-project-root
+			     (buffer-file-name buf)))
+	(kill-buffer buf))))
 
 (defun prodji-teardown-server (preserve-buffer)
   (cond (prodji-docker-buffer (prodji-teardown-docker preserve-buffer))
@@ -56,12 +77,15 @@ e.g. (concat-path \"/etc\" \"nginx.conf.d\") -> \"/etc/nginx.conf.d\""
 
 (defun prodji-teardown-shell (preserve-buffer)
   (when prodji-shell-buffer
-      (with-current-buffer prodji-shell-buffer
-	(comint-interrupt-subjob))
+    (let ((process (get-buffer-process prodji-shell-buffer)))
       (unless preserve-buffer
-	(interrupt-process (get-buffer-process prodji-shell-buffer))
-	(kill-buffer prodji-shell-buffer))
-      (setq prodji-shell-buffer nil)))
+	(set-process-sentinel
+	 (get-buffer-process prodji-shell-buffer)
+	 'prodji--kill-buffer-when-finished))
+      (with-current-buffer prodji-shell-buffer
+	(comint-interrupt-subjob)
+	(comint-send-eof)))
+    (setq prodji-shell-buffer nil)))
 
 (defun prodji-teardown-docker (preserve-buffer)
   (when prodji-docker-buffer
@@ -75,7 +99,7 @@ e.g. (concat-path \"/etc\" \"nginx.conf.d\") -> \"/etc/nginx.conf.d\""
 	(kill-buffer prodji-docker-buffer))
       (setq prodji-docker-buffer nil))))
 
-(defun prodji--django-process-sentinel (proc output)
+(defun prodji--kill-buffer-when-finished (proc output)
   (when (string= output "finished\n")
     (kill-buffer (process-buffer proc))))
 
@@ -84,7 +108,7 @@ e.g. (concat-path \"/etc\" \"nginx.conf.d\") -> \"/etc/nginx.conf.d\""
     (when (not preserve-buffer)
       (set-process-sentinel
        (get-buffer-process prodji-django-server-buffer)
-       'prodji--django-process-sentinel))
+       'prodji--kill-buffer-when-finished))
     (interrupt-process (get-buffer-process prodji-django-server-buffer))
     (setq prodji-django-server-buffer nil)))
 
@@ -115,7 +139,7 @@ e.g. (concat-path \"/etc\" \"nginx.conf.d\") -> \"/etc/nginx.conf.d\""
   "Get the value of VAR-NAME from project-root/.env or nil."
   (let ((dot-env-file (concat-path prodji-project-root ".env")))
     (when (not (file-readable-p dot-env-file))
-      (error "Can't read .env: %s" (concat-path prodji-project-root ".env")))
+      (error "File not readable: %s" (concat-path prodji-project-root ".env")))
     (with-temp-buffer
       (insert-file-contents dot-env-file)
       (goto-char (point-min))
