@@ -30,7 +30,7 @@ With prefix arg, preserve existing shell and server buffers."
     (prodji-teardown-shell)
     (prodji-teardown-django-server)
     (setq prodji-project-root nil)
-    (venv-workon venv-name))
+    (prodji-activate-venv venv-name))
   (let* ((shell-buffer (prodji-start-shell-process))
 	 (project-file (expand-file-name ".project" venv-current-dir))
 	 (project-root (with-temp-buffer
@@ -48,6 +48,14 @@ With prefix arg, preserve existing shell and server buffers."
 	 (prodji-start-django-server project-root))
 	(t (user-error "Need docker-compose.yml or .env to run server process"))))
 
+(defun prodji-activate-venv (venv-name)
+  (venv-workon venv-name)
+  (setq flycheck-python-pylint-executable
+	(concat-path venv-current-dir venv-executables-dir "python"))
+  (let ((settings (prodji-dot-env-get "DJANGO_SETTINGS_MODULE")))
+    (when settings
+      (setenv "DJANGO_SETTINGS_MODULE" settings))))
+
 (defun prodji-killall ()
   (interactive)
   (when prodji-project-root
@@ -56,7 +64,8 @@ With prefix arg, preserve existing shell and server buffers."
       (prodji-teardown-shell)
       (call-interactively 'prodji-kill-project-buffers)
       (setq prodji-project-root nil)
-      (venv-deactivate))))
+      (venv-deactivate)
+      (setq flycheck-python-pylint-executable "python"))))
 
 (defun prodji-kill-project-buffers ()
   (interactive)
@@ -74,13 +83,13 @@ With prefix arg, preserve existing shell and server buffers."
 	(prodji-django-server-buffer (prodji-teardown-django-server))
 	(t (user-error "No active prodji server process"))))
 
-(cl-defmacro prodji--teardown-process ((buffer &key (show-progress nil)) &rest how)
+(cl-defmacro prodji--teardown-process
+    ((buffer &key (show-progress nil) (preserve-buffer nil)) &rest how)
   "Terminate buffer-process BUFFER, according to HOW.
 
 If SHOW-PROGRESS is not nil, also include a progress reporter in
-the expansion. For example:
-
-(prodji--teardown-process (prodji-shell-buffer :show-progress t) (kill-buffer))."
+the expansion. If PRESERVE-BUFFER is not nil, don't kill the
+buffer."
   (declare (indent defun))
   `(when ,buffer
      (let ,(append `((process (get-buffer-process ,buffer)))
@@ -88,7 +97,9 @@ the expansion. For example:
 			`((reporter
 			   (make-progress-reporter
 			    (format "Stopping %s..." ,(symbol-name buffer)))))))
-       (set-process-sentinel process 'prodji--kill-buffer-when-finished)
+       ,(if preserve-buffer
+	    '(set-process-sentinel process 'prodji--noop-sentinel)
+	  '(set-process-sentinel process 'prodji--kill-buffer-when-finished))
        (with-current-buffer ,buffer
 	 ,@(append how (and show-progress '((progress-reporter-done reporter)))))
        (setq ,buffer nil))))
@@ -97,16 +108,22 @@ the expansion. For example:
   (when (string= output "finished\n")
     (kill-buffer (process-buffer proc))))
 
-(defun prodji-teardown-shell ()
-  (prodji--teardown-process (prodji-shell-buffer)
+(defun prodji--noop-sentinel (proc output)
+  "Prevent output from being inserted into proc buffer.")
+
+(defun prodji-teardown-shell (&optional preserve-buffer)
+  (prodji--teardown-process
+    (prodji-shell-buffer :preserve-buffer preserve-buffer)
     (comint-send-eof)))
 
-(defun prodji-teardown-docker ()
-  (prodji--teardown-process (prodji-docker-buffer :show-progress t)
+(defun prodji-teardown-docker (&optional preserve-buffer)
+  (prodji--teardown-process
+    (prodji-docker-buffer :show-progress t :preserve-buffer preserve-buffer)
     (call-process-shell-command "docker-compose stop" nil nil nil)))
 
-(defun prodji-teardown-django-server ()
-  (prodji--teardown-process (prodji-django-server-buffer)
+(defun prodji-teardown-django-server (&optional preserve-buffer)
+  (prodji--teardown-process
+    (prodji-django-server-buffer :preserve-buffer preserve-buffer)
     (interrupt-process (get-buffer-process prodji-django-server-buffer))))
 
 (defun prodji-start-shell-process ()
@@ -172,13 +189,13 @@ Attempt to read a DJANGO_SETTINGS_MODULE value from project-root/.env"
 
 (defun prodji-restart-django-server ()
   (when prodji-django-server-buffer
-    (prodji-teardown-django-server nil))
+    (prodji-teardown-django-server t))
   (pop-to-buffer-same-window
    (prodji-start-django-server prodji-project-root)))
 
 (defun prodji-restart-docker ()
   (when prodji-docker-buffer
-    (prodji-teardown-docker nil))
+    (prodji-teardown-docker t))
   (pop-to-buffer-same-window
    (prodji-start-docker-process prodji-project-root)))
 
