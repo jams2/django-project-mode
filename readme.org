@@ -1,3 +1,33 @@
 #+title: prodji
 
-Some helpers I use when working on django projects.
+This package is used for managing work between multiple Django
+projects. It assumes the use of docker-compose (with a
+docker-compose.yml file in the project root), or the Django
+development server (with a .env file in the project root, containing a
+DJANGO_SETTINGS_MODULE entry). The project root must be defined in
+$VIRTUAL_ENV_DIR/.project. The typical way to create a compatible
+virtual environment is with the Python virtualenvwrapper package, for
+example:
+
+=$ mkvirtualenv -a /path/to/project/root my-virtual-env=
+
+When a project is "active", it will have one running server
+process, one shell process, and the virtual environment will have
+been activated using virtualenvwrapper's =venv-workon=.
+
+To activate a project, call =prodji=. You will be prompted for the
+virtual environment name. Calling =prodji= with an environment
+active will tear down that projects processes before activating the
+new project. Some other functions are provided:
+
+- =prodji-restart-server= (restart the running server process)
+
+- =prodji-killall= (kill running processes, kill buffers with files
+	under project root)
+
+- =prodji-run-django-command= (run a Django management command in
+     the shell process)
+
+- =prodji-goto-server= (jump to the server buffer)
+
+- =prodji-goto-shell= (jump to the shell buffer)

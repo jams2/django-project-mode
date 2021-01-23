@@ -1,4 +1,68 @@
+;;; prodji.el --- Helpers for managing and working on Django projects  -*- lexical-binding: t; -*-
+
+;; Copyright (C) 2021  Joshua Munn
+
+;; Author: Joshua Munn <public@elysee-munn.family>
+;; URL: https://github.com/jams2/prodji/
+;; Version: 0.1.0
+;; Package-Requires: (virtualenvwrapper)
+;; Keywords: tools, processes
+
+;; This file is not part of GNU Emacs.
+
+;; This program is free software; you can redistribute it and/or modify
+;; it under the terms of the GNU General Public License as published by
+;; the Free Software Foundation, either version 3 of the License, or
+;; (at your option) any later version.
+
+;; This program is distributed in the hope that it will be useful,
+;; but WITHOUT ANY WARRANTY; without even the implied warranty of
+;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+;; GNU General Public License for more details.
+
+;; You should have received a copy of the GNU General Public License
+;; along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+;;; Commentary:
+
+;; This package is used for managing work between multiple Django
+;; projects. It assumes the use of docker-compose (with a
+;; docker-compose.yml file in the project root), or the Django
+;; development server (with a .env file in the project root,
+;; containing a DJANGO_SETTINGS_MODULE entry). The project root must
+;; be defined in $VIRTUAL_ENV_DIR/.project. The typical way to create
+;; a compatible virtual environment is with the Python
+;; virtualenvwrapper package, for example:
+;;
+;;	$ mkvirtualenv -a /path/to/project/root my-virtual-env
+;;
+;; When a project is "active", it will have one running server
+;; process, one shell process, and the virtual environment will have
+;; been activated using virtualenvwrapper's `venv-workon'.
+;;
+;; To activate a project, call `prodji'. You will be prompted for the
+;; virtual environment name. Calling `prodji' with an environment
+;; active will tear down that projects processes before activating the
+;; new project. Some other functions are provided:
+;;
+;; - `prodji-restart-server' (restart the running server process)
+;;
+;; - `prodji-killall' (kill running processes, kill buffers with files
+;; 	under project root)
+;;
+;; - `prodji-run-django-command' (run a Django management command in
+;;	the shell process)
+;;
+;; - `prodji-goto-server' (jump to the server buffer)
+;;
+;; - `prodji-goto-shell' (jump to the shell buffer)
+;;
+
+;;; Code:
+
 (require 'cl-lib)
+(require 'virtualenvwrapper)
+
 (defvar prodji-docker-buffer nil)
 (defvar prodji-shell-buffer nil)
 (defvar prodji-project-root nil)
@@ -17,9 +81,7 @@ Requires a Python virtual environment created with
 virtualenvwrapper, with the project root set (this is stored in
 the .project file in the virtual environment directory, when the
 virtual environment is created with a -a flag). If a project is
-already active, stop its processes and kill their buffers.
-
-With prefix arg, preserve existing shell and server buffers."
+already active, stop its processes and kill their buffers."
   (interactive)
   (let ((venv-name (venv-read-name
 		    (if venv-current-name
@@ -97,9 +159,9 @@ buffer."
 			`((reporter
 			   (make-progress-reporter
 			    (format "Stopping %s..." ,(symbol-name buffer)))))))
-       ,(if preserve-buffer
-	    '(set-process-sentinel process 'prodji--noop-sentinel)
-	  '(set-process-sentinel process 'prodji--kill-buffer-when-finished))
+       (if ,preserve-buffer
+	   (set-process-sentinel process 'prodji--noop-sentinel)
+	 (set-process-sentinel process 'prodji--kill-buffer-when-finished))
        (with-current-buffer ,buffer
 	 ,@(append how (and show-progress '((progress-reporter-done reporter)))))
        (setq ,buffer nil))))
@@ -109,7 +171,8 @@ buffer."
     (kill-buffer (process-buffer proc))))
 
 (defun prodji--noop-sentinel (proc output)
-  "Prevent output from being inserted into proc buffer.")
+  "Prevent output from being inserted into proc buffer."
+  nil)
 
 (defun prodji-teardown-shell (&optional preserve-buffer)
   (prodji--teardown-process
@@ -200,8 +263,7 @@ Attempt to read a DJANGO_SETTINGS_MODULE value from project-root/.env"
    (prodji-start-docker-process prodji-project-root)))
 
 (defun prodji--get-management-command-prefix ()
-  (or (and prodji-docker-buffer "docker-compose run web")
-      ""))
+  (or (and prodji-docker-buffer "docker-compose run web") ""))
 
 (defun prodji-run-django-command ()
   (interactive)
@@ -243,3 +305,6 @@ Attempt to read a DJANGO_SETTINGS_MODULE value from project-root/.env"
 
 (define-derived-mode prodji-docker-mode special-mode "django-docker"
   (setq font-lock-defaults '(prodji-docker-mode-highlights)))
+
+(provide 'prodji)
+;;; prodji.el ends here
