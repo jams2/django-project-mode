@@ -146,12 +146,7 @@ already active, stop its processes and kill their buffers."
 	(t (user-error "No active prodji server process"))))
 
 (cl-defmacro prodji--teardown-process
-    ((buffer &key (show-progress nil) (preserve-buffer nil)) &rest how)
-  "Terminate buffer-process BUFFER, according to HOW.
-
-If SHOW-PROGRESS is not nil, also include a progress reporter in
-the expansion. If PRESERVE-BUFFER is not nil, don't kill the
-buffer."
+    ((buffer &key show-progress sentinel) &rest how)
   (declare (indent defun))
   `(when ,buffer
      (let ,(append `((process (get-buffer-process ,buffer)))
@@ -159,12 +154,32 @@ buffer."
 			`((reporter
 			   (make-progress-reporter
 			    (format "Stopping %s..." ,(symbol-name buffer)))))))
-       (if ,preserve-buffer
-	   (set-process-sentinel process 'prodji--noop-sentinel)
-	 (set-process-sentinel process 'prodji--kill-buffer-when-finished))
+       (when ,sentinel
+	 ,(if show-progress
+	      `(set-process-sentinel process
+				     (lambda (proc output)
+				       (funcall ,sentinel proc output)
+				       (progress-reporter-done reporter)))
+	    `(set-process-sentinel process ,sentinel)))
        (with-current-buffer ,buffer
-	 ,@(append how (and show-progress '((progress-reporter-done reporter)))))
+	 ,@how)
        (setq ,buffer nil))))
+
+(cl-defmacro prodji-terminate-buffer-process
+    ((buffer &key show-progress preserve-buffer) &rest how)
+  "Terminate buffer-process BUFFER, according to HOW.
+
+If SHOW-PROGRESS is not nil, also include a progress reporter in
+the expansion. If PRESERVE-BUFFER is not nil, don't kill the
+buffer."
+  (declare (indent defun))
+  (let ((sentinel (if preserve-buffer
+		      ''prodji--noop-sentinel
+		    ''prodji--kill-buffer-when-finished)))
+    `(prodji--teardown-process
+       (,buffer :show-progress ,show-progress
+		:sentinel ,sentinel)
+       ,@how)))
 
 (defun prodji--kill-buffer-when-finished (proc output)
   (when (string= output "finished\n")
@@ -175,17 +190,17 @@ buffer."
   nil)
 
 (defun prodji-teardown-shell (&optional preserve-buffer)
-  (prodji--teardown-process
+  (prodji-terminate-buffer-process
     (prodji-shell-buffer :preserve-buffer preserve-buffer)
     (comint-send-eof)))
 
 (defun prodji-teardown-docker (&optional preserve-buffer)
-  (prodji--teardown-process
+  (prodji-terminate-buffer-process
     (prodji-docker-buffer :show-progress t :preserve-buffer preserve-buffer)
     (call-process-shell-command "docker-compose stop" nil nil nil)))
 
 (defun prodji-teardown-django-server (&optional preserve-buffer)
-  (prodji--teardown-process
+  (prodji-terminate-buffer-process
     (prodji-django-server-buffer :preserve-buffer preserve-buffer)
     (interrupt-process (get-buffer-process prodji-django-server-buffer))))
 
