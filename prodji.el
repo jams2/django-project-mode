@@ -266,11 +266,6 @@ Attempt to read a DJANGO_SETTINGS_MODULE value from project-root/.env"
   (or (and prodji-docker-buffer '("docker-compose" "run" "web"))
       '()))
 
-(defun prodji--django-command-sentinel (proc output)
-  (when (string-match "\\(finished\\)\\|\\(exited abnormally\\)" output)
-    (with-current-buffer (process-buffer proc)
-      (special-mode))))
-
 (defun prodji-run-django-command ()
   (interactive)
   (when (not prodji-shell-buffer)
@@ -284,16 +279,14 @@ Attempt to read a DJANGO_SETTINGS_MODULE value from project-root/.env"
 			  `(,command))))
     (with-current-buffer buf
       (cd prodji-project-root)
-      (setq buffer-read-only nil)
+      (delete-region (point-min) (point-max))
       (pop-to-buffer buf)
       (apply 'make-comint-in-buffer
 	     (format "<prodji:%s>" command)
 	     buf
 	     (first program)
 	     nil
-	     (rest program))
-      (set-process-sentinel (get-buffer-process buf)
-			    'prodji--django-command-sentinel))))
+	     (rest program)))))
 
 (defun prodji-goto-server (prefix)
   (interactive "P")
