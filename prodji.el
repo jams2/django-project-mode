@@ -146,24 +146,23 @@ already active, stop its processes and kill their buffers."
 	(t (user-error "No active prodji server process"))))
 
 (cl-defmacro prodji--teardown-process
-    ((buffer &key show-progress sentinel) &rest how)
+    ((buffer &key show-progress sentinel) how)
   (declare (indent defun))
-  `(when ,buffer
-     (let ,(append `((process (get-buffer-process ,buffer)))
-		   (and show-progress
-			`((reporter
-			   (make-progress-reporter
-			    (format "Stopping %s..." ,(symbol-name buffer)))))))
-       (when ,sentinel
-	 ,(if show-progress
-	      `(set-process-sentinel process
-				     (lambda (proc output)
-				       (funcall ,sentinel proc output)
-				       (progress-reporter-done reporter)))
-	    `(set-process-sentinel process ,sentinel)))
-       (with-current-buffer ,buffer
-	 ,@how)
-       (setq ,buffer nil))))
+  (let ((sentinel-not-nil (fboundp sentinel)))
+    `(when ,buffer
+       (let ,(append `((process (get-buffer-process ,buffer)))
+		     (and show-progress
+			  `((reporter
+			     (make-progress-reporter
+			      (format "Stopping %s..." ,(symbol-name buffer)))))))
+	 (when ,sentinel-not-nil
+	   (set-process-sentinel process
+				 (lambda (proc output)
+				   (,sentinel proc output)
+				   (when ,show-progress
+				     (progress-reporter-done reporter)))))
+	 (with-current-buffer ,buffer ,@how)
+	 (setq ,buffer nil)))))
 
 (cl-defmacro prodji-terminate-buffer-process
     ((buffer &key show-progress preserve-buffer) &rest how)
@@ -173,13 +172,12 @@ If SHOW-PROGRESS is not nil, also include a progress reporter in
 the expansion. If PRESERVE-BUFFER is not nil, don't kill the
 buffer."
   (declare (indent defun))
-  (let ((sentinel (if preserve-buffer
-		      ''prodji--noop-sentinel
-		    ''prodji--kill-buffer-when-finished)))
-    `(prodji--teardown-process
-       (,buffer :show-progress ,show-progress
-		:sentinel ,sentinel)
-       ,@how)))
+  `(prodji--teardown-process
+     (,buffer :show-progress ,show-progress
+	      :sentinel ,(if preserve-buffer
+			     'prodji--noop-sentinel
+			   'prodji--kill-buffer-when-finished))
+     ,how))
 
 (defun prodji--kill-buffer-when-finished (proc output)
   (when (string= output "finished\n")
