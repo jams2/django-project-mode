@@ -5,7 +5,7 @@
 ;; Author: Joshua Munn <public@elysee-munn.family>
 ;; URL: https://github.com/jams2/prodji/
 ;; Version: 0.1.0
-;; Package-Requires: (virtualenvwrapper)
+;; Package-Requires: (virtualenvwrapper cl-lib)
 ;; Keywords: tools, processes
 
 ;; This file is not part of GNU Emacs.
@@ -263,22 +263,37 @@ Attempt to read a DJANGO_SETTINGS_MODULE value from project-root/.env"
    (prodji-start-docker-process prodji-project-root)))
 
 (defun prodji--get-management-command-prefix ()
-  (or (and prodji-docker-buffer "docker-compose run web") ""))
+  (or (and prodji-docker-buffer '("docker-compose" "run" "web"))
+      '()))
+
+(defun prodji--django-command-sentinel (proc output)
+  (when (string-match "\\(finished\\)\\|\\(exited abnormally\\)" output)
+    (with-current-buffer (process-buffer proc)
+      (special-mode))))
 
 (defun prodji-run-django-command ()
   (interactive)
   (when (not prodji-shell-buffer)
     (user-error "project not activated"))
-  (let ((command (completing-read
-		  "Command: "
-		  '("makemigrations" "collectstatic" "migrate" "showmigrations" "shell"))))
-    (pop-to-buffer prodji-shell-buffer)
-    (comint-send-string
-     (get-buffer-process prodji-shell-buffer)
-     (format
-      "%s python manage.py %s\n"
-      (prodji--get-management-command-prefix)
-      command))))
+  (let* ((command (completing-read
+		   "Command: "
+		   '("makemigrations" "collectstatic" "migrate" "showmigrations" "shell")))
+	 (buf (get-buffer-create "*prodji-management-command*"))
+	 (program (append (prodji--get-management-command-prefix)
+			  '("python" "manage.py")
+			  `(,command))))
+    (with-current-buffer buf
+      (cd prodji-project-root)
+      (setq buffer-read-only nil)
+      (pop-to-buffer buf)
+      (apply 'make-comint-in-buffer
+	     (format "<prodji:%s>" command)
+	     buf
+	     (first program)
+	     nil
+	     (rest program))
+      (set-process-sentinel (get-buffer-process buf)
+			    'prodji--django-command-sentinel))))
 
 (defun prodji-goto-server (prefix)
   (interactive "P")
