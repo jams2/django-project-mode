@@ -72,7 +72,7 @@
   "Concatenate a file path, using expand-file-name to join PARTS intelligently.
 
 e.g. (concat-path \"/etc\" \"nginx.conf.d\") -> \"/etc/nginx.conf.d\""
-  (reduce (lambda (a b) (expand-file-name b a)) parts))
+  (cl-reduce (lambda (a b) (expand-file-name b a)) parts))
 
 (defun prodji ()
   "Start work on a Django project.
@@ -292,9 +292,9 @@ Attempt to read a DJANGO_SETTINGS_MODULE value from project-root/.env"
       (apply 'make-comint-in-buffer
 	     (format "<prodji:%s>" command)
 	     buf
-	     (first program)
+	     (car program)
 	     nil
-	     (rest program)))))
+	     (cdr program)))))
 
 (defun prodji-goto-server (prefix)
   (interactive "P")
