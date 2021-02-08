@@ -274,7 +274,13 @@ Attempt to read a DJANGO_SETTINGS_MODULE value from project-root/.env"
     (user-error "project not activated"))
   (let* ((command (completing-read
 		   "Command: "
-		   '("makemigrations" "collectstatic" "migrate" "showmigrations" "shell")))
+		   '("makemigrations"
+		     "collectstatic"
+		     "migrate"
+		     "showmigrations"
+		     "shell"
+		     "test"
+		     "createsuperuser")))
 	 (buf (get-buffer-create "*prodji-management-command*"))
 	 (program (append (prodji--get-management-command-prefix)
 			  '("python" "manage.py")
