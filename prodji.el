@@ -63,10 +63,11 @@
 (require 'cl-lib)
 (require 'virtualenvwrapper)
 
-(defvar prodji-docker-buffer nil)
 (defvar prodji-shell-buffer nil)
 (defvar prodji-project-root nil)
-(defvar prodji-django-server-buffer nil)
+(defvar prodji-server-process-buffer nil)
+
+(cl-defstruct prodji-server type buffer)
 
 (defun concat-path (&rest parts)
   "Concatenate a file path, using expand-file-name to join PARTS intelligently.
@@ -88,29 +89,51 @@ already active, stop its processes and kill their buffers."
 			(format "Project venv (currently %s): " venv-current-name)
 		      "Project venv: ")))
 	(kill-buffer-query-functions nil))
-    (when prodji-docker-buffer
-      (prodji-teardown-docker nil))
     (when prodji-shell-buffer
       (prodji-teardown-shell nil))
-    (when prodji-django-server-buffer
-      (prodji-teardown-django-server nil))
+    (when prodji-server-process-buffer
+      (prodji--kill-server-process))
     (setq prodji-project-root nil)
-    (prodji-activate-venv venv-name))
-  (let* ((shell-buffer (prodji-start-shell-process))
-	 (project-file (expand-file-name ".project" venv-current-dir))
+    (prodji--setup-next-project venv-name)))
+
+(defmacro prodji--with-server-buffer (&rest body)
+  `(if prodji-server-process-buffer
+       (with-current-buffer (prodji-server-buffer prodji-server-process-buffer)
+	 ,@body)
+     (user-error "no active server buffer")))
+
+(defmacro prodji--match-server-type (&rest type-cases)
+  `(if prodji-server-process-buffer
+       (cl-case (prodji-server-type prodji-server-process-buffer)
+	 ,@type-cases)
+     (user-error "no active django server")))
+
+(defun prodji--kill-server-process ()
+  (prodji--match-server-type
+   ('docker (prodji-teardown-docker nil))
+   ('shell-process (prodji-teardown-django-server nil))))
+
+(defun prodji--setup-next-project (venv-name)
+  (prodji-activate-venv venv-name)
+  (let* ((project-file (expand-file-name ".project" venv-current-dir))
 	 (project-root (with-temp-buffer
 			 (insert-file-contents project-file)
 			 (string-trim (buffer-string))))
-	 (server-buffer (prodji-start-docker-or-django project-root)))
+	 (server-buffer (prodji-server-buffer
+			 (prodji-start-docker-or-django project-root))))
+    (prodji-start-shell-process)
     (setq prodji-project-root project-root)
-    (if server-buffer (switch-to-buffer server-buffer)
-      (switch-to-buffer shell-buffer))))
+    (when server-buffer (pop-to-buffer server-buffer))))
 
 (defun prodji-start-docker-or-django (project-root)
   (cond ((file-exists-p (concat-path project-root "docker-compose.yml"))
-	 (prodji-start-docker-process project-root))
+	 (setq prodji-server-process-buffer
+	       (make-prodji-server :buffer (prodji-start-docker-process project-root)
+				   :type 'docker)))
 	((file-exists-p (concat-path project-root ".env"))
-	 (prodji-start-django-server project-root))
+	 (setq prodji-server-process-buffer
+	       (make-prodji-server :buffer (prodji-start-django-server project-root)
+				   :type 'shell-process)))
 	(t (user-error "Need docker-compose.yml or .env to run server process"))))
 
 (defun prodji-activate-venv (venv-name)
@@ -125,7 +148,7 @@ already active, stop its processes and kill their buffers."
   (interactive)
   (when prodji-project-root
     (let ((kill-buffer-query-functions nil))
-      (prodji-teardown-server)
+      (prodji--kill-server-process)
       (prodji-teardown-shell)
       (call-interactively 'prodji-kill-project-buffers)
       (setq prodji-project-root nil)
@@ -143,11 +166,6 @@ already active, stop its processes and kill their buffers."
 			     (buffer-file-name buf)))
 	(kill-buffer buf))))
 
-(defun prodji-teardown-server ()
-  (cond (prodji-docker-buffer (prodji-teardown-docker nil))
-	(prodji-django-server-buffer (prodji-teardown-django-server nil))
-	(t (user-error "No active prodji server process"))))
-
 (cl-defmacro prodji--teardown-process
     ((buffer &key show-progress sentinel) &rest how)
   (declare (indent defun))
@@ -157,7 +175,7 @@ already active, stop its processes and kill their buffers."
 		     (and show-progress
 			  `((reporter
 			     (make-progress-reporter
-			      (format "Stopping %s..." ,(symbol-name buffer)))))))
+			      (format "Stopping %s..." ,buffer))))))
 	 (when ,sentinel-not-nil
 	   (set-process-sentinel process
 				 (lambda (proc output)
@@ -181,15 +199,17 @@ already active, stop its processes and kill their buffers."
     (comint-send-eof)))
 
 (defun prodji-teardown-docker (&optional preserve-buffer)
-  (prodji--teardown-process
-    (prodji-docker-buffer :show-progress t
-			  :sentinel prodji--kill-buffer-when-finished)
-    (call-process-shell-command "docker-compose stop" nil nil nil)))
+  (let ((buf (prodji-server-buffer prodji-server-process-buffer)))
+    (prodji--teardown-process
+      (buf :show-progress t
+	   :sentinel prodji--kill-buffer-when-finished)
+      (call-process-shell-command "docker-compose stop" nil nil nil))))
 
 (defun prodji-teardown-django-server (&optional preserve-buffer)
-  (prodji--teardown-process
-    (prodji-django-server-buffer :sentinel prodji--kill-buffer-when-finished)
-    (interrupt-process (get-buffer-process prodji-django-server-buffer))))
+  (let ((buf (prodji-server-buffer prodji-server-process-buffer)))
+    (prodji--teardown-process
+      (buf :sentinel prodji--kill-buffer-when-finished)
+      (interrupt-process (get-buffer-process buf)))))
 
 (defun prodji-start-shell-process ()
   (let ((shell-buffer (shell (format "*shell-%s*" venv-current-name))))
@@ -206,7 +226,7 @@ already active, stop its processes and kill their buffers."
        "up"
        "--no-color")
       (prodji-docker-mode))
-    (setq prodji-docker-buffer docker-buffer)))
+    docker-buffer))
 
 (defun prodji-get-python-executable ()
   (concat-path
@@ -244,23 +264,21 @@ Attempt to read a DJANGO_SETTINGS_MODULE value from project-root/.env"
        "--settings"
        (prodji-dot-env-get "DJANGO_SETTINGS_MODULE"))
       (special-mode))
-    (setq prodji-django-server-buffer server-buffer)))
+    server-buffer))
 
 (defun prodji-restart-server ()
   (interactive)
-  (cond (prodji-docker-buffer (prodji-restart-docker))
-	(prodji-django-server-buffer (prodji-restart-django-server))
-	(t (user-error "No active prodji server process"))))
+  (prodji--match-server-type
+   ('docker (prodji-restart-docker))
+   ('shell-process (prodji-restart-django-server))))
 
 (defun prodji-restart-django-server ()
-  (when prodji-django-server-buffer
-    (prodji-teardown-django-server t))
+  (prodji-teardown-django-server t)
   (pop-to-buffer-same-window
    (prodji-start-django-server prodji-project-root)))
 
 (defun prodji-restart-docker ()
-  (when prodji-docker-buffer
-    (prodji-teardown-docker t))
+  (prodji-teardown-docker t)
   (pop-to-buffer-same-window
    (prodji-start-docker-process prodji-project-root)))
 
@@ -298,11 +316,8 @@ Attempt to read a DJANGO_SETTINGS_MODULE value from project-root/.env"
 
 (defun prodji-goto-server (prefix)
   (interactive "P")
-  (cond (prodji-docker-buffer
-	 (prodji--goto-buffer prodji-docker-buffer prefix))
-	(prodji-django-server-buffer
-	 (prodji--goto-buffer prodji-django-server-buffer prefix))
-	(t (user-error "No active prodji server buffer"))))
+  (prodji--with-server-buffer
+   (prodji--goto-buffer (current-buffer) prefix)))
 
 (defun prodji-goto-shell (other-window)
   (interactive "P")
