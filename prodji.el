@@ -151,9 +151,9 @@ already active, stop its processes and kill their buffers."
       (prodji--kill-server-process)
       (prodji-teardown-shell)
       (call-interactively 'prodji-kill-project-buffers)
-      (setq prodji-project-root nil)
-      (venv-deactivate)
-      (setq flycheck-python-pylint-executable "python"))))
+      (setq prodji-project-root nil
+	    flycheck-python-pylint-executable "python")
+      (venv-deactivate))))
 
 (defun prodji-kill-project-buffers ()
   (interactive)
@@ -283,7 +283,8 @@ Attempt to read a DJANGO_SETTINGS_MODULE value from project-root/.env"
    (prodji-start-docker-process prodji-project-root)))
 
 (defun prodji--get-management-command-prefix ()
-  (or (and prodji-docker-buffer '("docker-compose" "run" "web"))
+  (or (and (eq (prodji-server-type prodji-server-process-buffer) 'docker)
+	   '("docker-compose" "run" "web"))
       '()))
 
 (defun prodji-run-django-command ()
