@@ -303,7 +303,7 @@ Attempt to read a DJANGO_SETTINGS_MODULE value from project-root/.env"
 	 (buf (get-buffer-create "*prodji-management-command*"))
 	 (program (append (prodji--get-management-command-prefix)
 			  '("python" "manage.py")
-			  `(,command))))
+			  (split-string command))))
     (with-current-buffer buf
       (cd prodji-project-root)
       (delete-region (point-min) (point-max))
