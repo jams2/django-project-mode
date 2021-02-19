@@ -203,13 +203,15 @@ already active, stop its processes and kill their buffers."
     (prodji--teardown-process
       (buf :show-progress t
 	   :sentinel prodji--kill-buffer-when-finished)
-      (call-process-shell-command "docker-compose stop" nil nil nil))))
+      (call-process-shell-command "docker-compose stop" nil nil nil)
+      (setq prodji-server-process-buffer nil))))
 
 (defun prodji-teardown-django-server (&optional preserve-buffer)
   (let ((buf (prodji-server-buffer prodji-server-process-buffer)))
     (prodji--teardown-process
       (buf :sentinel prodji--kill-buffer-when-finished)
-      (interrupt-process (get-buffer-process buf)))))
+      (interrupt-process (get-buffer-process buf))
+      (setq prodji-server-process-buffer nil))))
 
 (defun prodji-start-shell-process ()
   (let ((shell-buffer (shell (format "*shell-%s*" venv-current-name))))
