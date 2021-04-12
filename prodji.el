@@ -5,7 +5,7 @@
 ;; Author: Joshua Munn <public@elysee-munn.family>
 ;; URL: https://github.com/jams2/prodji/
 ;; Version: 0.1.0
-;; Package-Requires: (virtualenvwrapper cl-lib)
+;; Package-Requires: (virtualenvwrapper cl-lib vterm)
 ;; Keywords: tools, processes
 
 ;; This file is not part of GNU Emacs.
@@ -62,6 +62,7 @@
 
 (require 'cl-lib)
 (require 'virtualenvwrapper)
+(require 'vterm)
 
 (defvar prodji-shell-buffer nil)
 (defvar prodji-project-root nil)
@@ -196,7 +197,8 @@ already active, stop its processes and kill their buffers."
 (defun prodji-teardown-shell (&optional preserve-buffer)
   (prodji--teardown-process
     (prodji-shell-buffer :sentinel prodji--kill-buffer-when-finished)
-    (comint-send-eof)))
+    (with-current-buffer prodji-shell-buffer
+      (vterm-send-C-d))))
 
 (defun prodji-teardown-docker (&optional preserve-buffer)
   (let ((buf (prodji-server-buffer prodji-server-process-buffer)))
@@ -214,7 +216,7 @@ already active, stop its processes and kill their buffers."
       (setq prodji-server-process-buffer nil))))
 
 (defun prodji-start-shell-process ()
-  (let ((shell-buffer (shell (format "*shell-%s*" venv-current-name))))
+  (let ((shell-buffer (vterm (format "*shell-%s*" venv-current-name))))
     (setq prodji-shell-buffer shell-buffer)))
 
 (defun prodji-start-docker-process (working-directory)
@@ -277,12 +279,12 @@ Attempt to read a DJANGO_SETTINGS_MODULE value from project-root/.env"
 (defun prodji-restart-django-server ()
   (prodji-teardown-django-server t)
   (pop-to-buffer-same-window
-   (prodji-start-django-server prodji-project-root)))
+   (prodji-start-docker-or-django prodji-project-root)))
 
 (defun prodji-restart-docker ()
   (prodji-teardown-docker t)
   (pop-to-buffer-same-window
-   (prodji-start-docker-process prodji-project-root)))
+   (prodji-start-docker-or-django prodji-project-root)))
 
 (defun prodji--get-management-command-prefix ()
   (or (and (eq (prodji-server-type prodji-server-process-buffer) 'docker)
