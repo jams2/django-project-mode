@@ -197,10 +197,7 @@ already active, stop its processes and kill their buffers."
 (defun prodji-teardown-shell (&optional preserve-buffer)
   (prodji--teardown-process
     (prodji-shell-buffer :sentinel prodji--kill-buffer-when-finished)
-    (with-current-buffer prodji-shell-buffer
-      (progn
-	(vterm-send-C-c)
-	(vterm-send-C-d)))))
+    (kill-buffer (current-buffer))))
 
 (defun prodji-teardown-docker (&optional preserve-buffer)
   (let ((buf (prodji-server-buffer prodji-server-process-buffer)))
