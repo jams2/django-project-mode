@@ -1,11 +1,11 @@
 ;;; prodji.el --- Helpers for managing and working on Django projects  -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2021  Joshua Munn
+;; Copyright (C) 2022 Joshua Munn
 
 ;; Author: Joshua Munn <public@elysee-munn.family>
 ;; URL: https://github.com/jams2/prodji/
 ;; Version: 0.1.0
-;; Package-Requires: (virtualenvwrapper cl-lib vterm shell)
+;; Package-Requires: (virtualenvwrapper cl-lib vterm shell subr-x)
 ;; Keywords: tools, processes
 
 ;; This file is not part of GNU Emacs.
@@ -48,7 +48,7 @@
 ;; - `prodji-restart-server' (restart the running server process)
 ;;
 ;; - `prodji-killall' (kill running processes, kill buffers with files
-;; 	under project root)
+;; 	under project root, deactivate virtualenv)
 ;;
 ;; - `prodji-run-django-command' (run a Django management command in
 ;;	the shell process)
@@ -64,7 +64,8 @@
   (require 'cl-lib)
   (require 'virtualenvwrapper)
   (require 'vterm)
-  (require 'shell))
+  (require 'shell)
+  (require 'subr-x))
 
 (defvar prodji-shell-buffer nil)
 
@@ -304,19 +305,26 @@ Attempt to read a DJANGO_SETTINGS_MODULE value from project-root/.env"
 		   '("run" "--rm" "web")))
       '()))
 
+(defun prodji-find-management-commands-from-dir (dir)
+  "Find Django management commands, searching from DIR.
+
+Returns names of .py files in **/management/commands/."
+  (let* ((find-query
+	 "-path '*/management/commands/*.py' -not -name '__init__.py' -exec basename {} .py \\;")
+	(command (string-join `("find" ,dir ,find-query) " ")))
+    (with-temp-buffer
+      (shell-command command t)
+      (split-string (buffer-string)))))
+
 (defun prodji-run-django-command ()
   (interactive)
   (when (not prodji-shell-buffer)
     (user-error "project not activated"))
   (let* ((command (completing-read
 		   "Command: "
-		   '("makemigrations"
-		     "collectstatic"
-		     "migrate"
-		     "showmigrations"
-		     "shell"
-		     "test"
-		     "createsuperuser")))
+		   (append
+		    (prodji-find-management-commands-from-dir venv-current-dir)
+		    (prodji-find-management-commands-from-dir prodji-project-root))))
 	 (buf (get-buffer-create "*prodji-management-command*"))
 	 (program (append (prodji--get-management-command-prefix)
 			  '("python" "manage.py")
