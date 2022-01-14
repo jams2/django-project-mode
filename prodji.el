@@ -5,7 +5,7 @@
 ;; Author: Joshua Munn <public@elysee-munn.family>
 ;; URL: https://github.com/jams2/prodji/
 ;; Version: 0.1.0
-;; Package-Requires: (virtualenvwrapper cl-lib vterm)
+;; Package-Requires: (virtualenvwrapper cl-lib vterm shell)
 ;; Keywords: tools, processes
 
 ;; This file is not part of GNU Emacs.
@@ -26,7 +26,7 @@
 ;;; Commentary:
 
 ;; This package is used for managing work between multiple Django
-;; projects. It assumes the use of docker-compose (with a
+;; projects. It assumes the use of docker compose (with a
 ;; docker-compose.yml file in the project root), or the Django
 ;; development server (with a .env file in the project root,
 ;; containing a DJANGO_SETTINGS_MODULE entry). The project root must
@@ -60,20 +60,33 @@
 
 ;;; Code:
 
-(require 'cl-lib)
-(require 'virtualenvwrapper)
-(require 'vterm)
+(eval-when-compile
+  (require 'cl-lib)
+  (require 'virtualenvwrapper)
+  (require 'vterm)
+  (require 'shell))
 
 (defvar prodji-shell-buffer nil)
+
 (defvar prodji-project-root nil)
+
 (defvar prodji-server-process-buffer nil)
+
+(defcustom prodji-docker-compose-executable "docker compose"
+  "Docker compose executable.
+
+Older versions use a `docker-compose' executable."
+  :type 'string)
 
 (cl-defstruct prodji-server type buffer)
 
-(defun concat-path (&rest parts)
+(defun prodji-docker-command (action)
+  (string-join `(,prodji-docker-compose-executable ,action) " "))
+
+(defun prodji-concat-path (&rest parts)
   "Concatenate a file path, using expand-file-name to join PARTS intelligently.
 
-e.g. (concat-path \"/etc\" \"nginx.conf.d\") -> \"/etc/nginx.conf.d\""
+e.g. (prodji-concat-path \"/etc\" \"nginx.conf.d\") -> \"/etc/nginx.conf.d\""
   (cl-reduce (lambda (a b) (expand-file-name b a)) parts))
 
 (defun prodji ()
@@ -127,11 +140,11 @@ already active, stop its processes and kill their buffers."
     (when server-buffer (pop-to-buffer server-buffer))))
 
 (defun prodji-start-docker-or-django (project-root)
-  (cond ((file-exists-p (concat-path project-root "docker-compose.yml"))
+  (cond ((file-exists-p (prodji-concat-path project-root "docker-compose.yml"))
 	 (setq prodji-server-process-buffer
 	       (make-prodji-server :buffer (prodji-start-docker-process project-root)
 				   :type 'docker)))
-	((file-exists-p (concat-path project-root ".env"))
+	((file-exists-p (prodji-concat-path project-root ".env"))
 	 (setq prodji-server-process-buffer
 	       (make-prodji-server :buffer (prodji-start-django-server project-root)
 				   :type 'shell-process)))
@@ -140,7 +153,7 @@ already active, stop its processes and kill their buffers."
 (defun prodji-activate-venv (venv-name)
   (venv-workon venv-name)
   (setq flycheck-python-pylint-executable
-	(concat-path venv-current-dir venv-executables-dir "python"))
+	(prodji-concat-path venv-current-dir venv-executables-dir "python"))
   (let ((settings (prodji-dot-env-get "DJANGO_SETTINGS_MODULE")))
     (when settings
       (setenv "DJANGO_SETTINGS_MODULE" settings))))
@@ -204,7 +217,7 @@ already active, stop its processes and kill their buffers."
     (prodji--teardown-process
       (buf :show-progress t
 	   :sentinel prodji--kill-buffer-when-finished)
-      (call-process-shell-command "docker-compose stop" nil nil nil)
+      (call-process-shell-command (prodji-docker-command "stop") nil nil nil)
       (setq prodji-server-process-buffer nil))))
 
 (defun prodji-teardown-django-server (&optional preserve-buffer)
@@ -222,26 +235,26 @@ already active, stop its processes and kill their buffers."
   (let ((docker-buffer (get-buffer-create (format "*docker-%s*" venv-current-name))))
     (with-current-buffer docker-buffer
       (cd working-directory)
-      (start-file-process
-       (format "docker-compose:%s" venv-current-name)
-       docker-buffer
-       "docker-compose"
-       "up"
-       "--no-color")
+      (let ((args (append (split-string-shell-command prodji-docker-compose-executable)
+			  '("up" "--no-color"))))
+	(apply 'start-file-process
+	       (format "docker-compose:%s" venv-current-name)
+	       docker-buffer
+	       args))
       (prodji-docker-mode))
     docker-buffer))
 
 (defun prodji-get-python-executable ()
-  (concat-path
+  (prodji-concat-path
    venv-current-dir
    venv-executables-dir
    "python"))
 
 (defun prodji-dot-env-get (var-name)
   "Get the value of VAR-NAME from project-root/.env or nil."
-  (let ((dot-env-file (concat-path prodji-project-root ".env")))
+  (let ((dot-env-file (prodji-concat-path prodji-project-root ".env")))
     (when (not (file-readable-p dot-env-file))
-      (error "File not readable: %s" (concat-path prodji-project-root ".env")))
+      (error "File not readable: %s" (prodji-concat-path prodji-project-root ".env")))
     (with-temp-buffer
       (insert-file-contents dot-env-file)
       (goto-char (point-min))
@@ -287,7 +300,8 @@ Attempt to read a DJANGO_SETTINGS_MODULE value from project-root/.env"
 
 (defun prodji--get-management-command-prefix ()
   (or (and (eq (prodji-server-type prodji-server-process-buffer) 'docker)
-	   '("docker-compose" "run" "web"))
+	   (append (split-string-shell-command prodji-docker-compose-executable)
+		   '("run" "--rm" "web")))
       '()))
 
 (defun prodji-run-django-command ()
@@ -306,7 +320,7 @@ Attempt to read a DJANGO_SETTINGS_MODULE value from project-root/.env"
 	 (buf (get-buffer-create "*prodji-management-command*"))
 	 (program (append (prodji--get-management-command-prefix)
 			  '("python" "manage.py")
-			  (split-string command))))
+			  (split-string-shell-command command))))
     (with-current-buffer buf
       (cd prodji-project-root)
       (delete-region (point-min) (point-max))
