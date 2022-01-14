@@ -310,8 +310,8 @@ Attempt to read a DJANGO_SETTINGS_MODULE value from project-root/.env"
 
 Returns names of .py files in **/management/commands/."
   (let* ((find-query
-	 "-path '*/management/commands/*.py' -not -name '__init__.py' -exec basename {} .py \\;")
-	(command (string-join `("find" ,dir ,find-query) " ")))
+	  "-path '*/management/commands/*.py' -not -name '__init__.py' -exec basename {} .py \\;")
+	 (command (string-join `("find" ,dir ,find-query) " ")))
     (with-temp-buffer
       (shell-command command t)
       (split-string (buffer-string)))))
