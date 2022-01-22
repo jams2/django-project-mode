@@ -73,6 +73,13 @@
 
 (defvar prodji-server-process-buffer nil)
 
+(defcustom prodji-create-pyright-config nil
+  "Whether a pyrightconfig.json file should be created.
+
+If `t', a pyrightconfig.json file will be created in the project
+root, if it does not exist."
+  :type 'boolean)
+
 (defcustom prodji-docker-compose-executable "docker compose"
   "Docker compose executable.
 
@@ -128,6 +135,22 @@ already active, stop its processes and kill their buffers."
    ('docker (prodji-teardown-docker nil))
    ('shell-process (prodji-teardown-django-server nil))))
 
+(defun prodji--get-python-version-for-pyright ()
+  "Get a MAJOR.MINOR python version string for the pyright config."
+  (let ((semver-string (cadr (split-string (shell-command-to-string "python --version")))))
+    (string-match "^[0-9]\\.[0-9]" semver-string)
+    (match-string 0 semver-string)))
+
+(defun prodji--maybe-write-pyright-config (project-root venv-name)
+  "Write a basic pyright config json file."
+  (let ((pyright-config-path (prodji-concat-path project-root "pyrightconfig.json")))
+    (when (and prodji-create-pyright-config
+	       (not (file-exists-p pyright-config-path)))
+      (let* ((python-version (prodji--get-python-version-for-pyright))
+	     (output (json-serialize
+		      `(:venv ,venv-name :pythonVersion ,python-version))))
+	(append-to-file output nil pyright-config-path)))))
+
 (defun prodji--setup-next-project (venv-name)
   (prodji-activate-venv venv-name)
   (let* ((project-file (expand-file-name ".project" venv-current-dir))
@@ -136,6 +159,7 @@ already active, stop its processes and kill their buffers."
 			 (string-trim (buffer-string))))
 	 (server-buffer (prodji-server-buffer
 			 (prodji-start-docker-or-django project-root))))
+    (prodji--maybe-write-pyright-config project-root venv-name)
     (prodji-start-shell-process)
     (setq prodji-project-root project-root)
     (when server-buffer (pop-to-buffer server-buffer))))
