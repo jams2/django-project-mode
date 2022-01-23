@@ -88,6 +88,17 @@ Older versions use a `docker-compose' executable."
 
 (cl-defstruct prodji-server type buffer)
 
+(defun split-string-shell-command (string)
+  "Split STRING (a shell command) into a list of strings.
+General shell syntax, like single and double quoting, as well as
+backslash quoting, is respected.
+
+Borrowed from emacs git as not available in 27."
+  (with-temp-buffer
+    (insert string)
+    (let ((comint-file-name-quote-list shell-file-name-quote-list))
+      (car (shell--parse-pcomplete-arguments)))))
+
 (defun prodji-docker-command (action)
   (string-join `(,prodji-docker-compose-executable ,action) " "))
 
