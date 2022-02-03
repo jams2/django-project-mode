@@ -5,7 +5,7 @@
 ;; Author: Joshua Munn <public@elysee-munn.family>
 ;; URL: https://github.com/jams2/prodji/
 ;; Version: 0.1.0
-;; Package-Requires: (virtualenvwrapper cl-lib vterm shell subr-x)
+;; Package-Requires: (virtualenvwrapper cl-lib vterm shell subr-x comint)
 ;; Keywords: tools, processes
 
 ;; This file is not part of GNU Emacs.
@@ -65,7 +65,8 @@
   (require 'virtualenvwrapper)
   (require 'vterm)
   (require 'shell)
-  (require 'subr-x))
+  (require 'subr-x)
+  (require 'comint))
 
 (defvar prodji-shell-buffer nil)
 
@@ -73,18 +74,35 @@
 
 (defvar prodji-server-process-buffer nil)
 
+(defvar prodji-venv-name nil)
+
+(defvar prodji-venv-directory nil)
+
+(defcustom prodji-project-directory (expand-file-name "~/projects")
+  "Directory containing the user's projects"
+  :type '(string))
+
+(defcustom prodji-poetry-virtual-env-dir (expand-file-name "~/.cache/pypoetry/virtualenvs")
+  "Directory that contains python virtual environment directories."
+  :type '(string))
+
+(defcustom prodji-virtual-env-manager 'poetry
+  "Method used for management of virtual environments."
+  :type '(symbol)
+  :options '(poetry virtualenvwrapper))
+
 (defcustom prodji-create-pyright-config nil
   "Whether a pyrightconfig.json file should be created.
 
 If `t', a pyrightconfig.json file will be created in the project
 root, if it does not exist."
-  :type 'boolean)
+  :type '(boolean))
 
 (defcustom prodji-docker-compose-executable "docker compose"
   "Docker compose executable.
 
 Older versions use a `docker-compose' executable."
-  :type 'string)
+  :type '(string))
 
 (cl-defstruct prodji-server type buffer)
 
@@ -108,6 +126,23 @@ Borrowed from emacs git as not available in 27."
 e.g. (prodji-concat-path \"/etc\" \"nginx.conf.d\") -> \"/etc/nginx.conf.d\""
   (cl-reduce (lambda (a b) (expand-file-name b a)) parts))
 
+(defun prodji-virtualenvwrapper-read-name ()
+  "Get the venv name using virtualenvwrapper."
+  (venv-read-name
+   (if venv-current-name
+       (format "Project venv (currently %s): " venv-current-name)
+     "Project venv: ")))
+
+(defun prodji-poetry-read-name ()
+  "Get the venv name for a poetry-created virtual environment."
+  (let ((choices (split-string
+		  (shell-command-to-string
+		   (concat "ls " prodji-poetry-virtual-env-dir))))
+	(prompt (if prodji-venv-name
+		    (format "Project venv (currently %s): " venv-current-name)
+		  "Project venv: ")))
+    (completing-read prompt choices nil t nil)))
+
 (defun prodji ()
   "Start work on a Django project.
 
@@ -117,16 +152,18 @@ the .project file in the virtual environment directory, when the
 virtual environment is created with a -a flag). If a project is
 already active, stop its processes and kill their buffers."
   (interactive)
-  (let ((venv-name (venv-read-name
-		    (if venv-current-name
-			(format "Project venv (currently %s): " venv-current-name)
-		      "Project venv: ")))
-	(kill-buffer-query-functions nil))
+  (let* ((venv-name-read-function (if (eq prodji-virtual-env-manager 'virtualenvwrapper)
+				      #'prodji-virtualenvwrapper-read-name
+				    #'prodji-poetry-read-name))
+	 (venv-name (funcall venv-name-read-function))
+	 (kill-buffer-query-functions nil))
     (when prodji-shell-buffer
       (prodji-teardown-shell nil))
     (when prodji-server-process-buffer
       (prodji--kill-server-process))
-    (setq prodji-project-root nil)
+    (setq prodji-project-root nil
+	  prodji-venv-name nil
+	  prodji-venv-directory nil)
     (prodji--setup-next-project venv-name)))
 
 (defmacro prodji--with-server-buffer (&rest body)
@@ -162,12 +199,24 @@ already active, stop its processes and kill their buffers."
 		      `(:venv ,venv-name :pythonVersion ,python-version))))
 	(append-to-file output nil pyright-config-path)))))
 
+(defun prodji--project-root-from-virtualenvwrapper ()
+  (let ((project-file (expand-file-name ".project" venv-current-dir)))
+    (with-temp-buffer
+      (insert-file-contents project-file)
+      (string-trim (buffer-string)))))
+
+(defun prodji--project-root-from-choice ()
+  (or (read-file-name
+       "Select project root: "
+       (expand-file-name prodji-project-directory))
+      (user-error "must select project root directory")))
+
 (defun prodji--setup-next-project (venv-name)
   (prodji-activate-venv venv-name)
-  (let* ((project-file (expand-file-name ".project" venv-current-dir))
-	 (project-root (with-temp-buffer
-			 (insert-file-contents project-file)
-			 (string-trim (buffer-string))))
+  (let* ((project-root-getter (if (eq prodji-virtual-env-manager 'virtualenvwrapper)
+				  #'prodji--project-root-from-virtualenvwrapper
+				#'prodji--project-root-from-choice))
+	 (project-root (funcall project-root-getter))
 	 (server-buffer (prodji-server-buffer
 			 (prodji-start-docker-or-django project-root))))
     (prodji--maybe-write-pyright-config project-root venv-name)
@@ -177,9 +226,12 @@ already active, stop its processes and kill their buffers."
 
 (defun prodji-start-docker-or-django (project-root)
   (cond ((file-exists-p (prodji-concat-path project-root "docker-compose.yml"))
-	 (setq prodji-server-process-buffer
-	       (make-prodji-server :buffer (prodji-start-docker-process project-root)
-				   :type 'docker)))
+	 (let ((docker-func (if (eq prodji-virtual-env-manager 'virtualenvwrapper)
+				#'prodji--virtualenvwrapper-start-docker-process
+			      #'prodji--poetry-start-docker-process)))
+	   (setq prodji-server-process-buffer
+		 (make-prodji-server :buffer (funcall docker-func project-root)
+				     :type 'docker))))
 	((file-exists-p (prodji-concat-path project-root ".env"))
 	 (setq prodji-server-process-buffer
 	       (make-prodji-server :buffer (prodji-start-django-server project-root)
@@ -187,9 +239,17 @@ already active, stop its processes and kill their buffers."
 	(t (user-error "Need docker-compose.yml or .env to run server process"))))
 
 (defun prodji-activate-venv (venv-name)
-  (venv-workon venv-name)
+  (setq prodji-venv-name venv-name)
+  (pcase prodji-virtual-env-manager
+    ('poetry
+     (setq prodji-venv-directory
+	   (prodji-concat-path prodji-venv-directory venv-name)))
+    ('virtualenvwrapper
+     (progn
+       (venv-workon venv-name)
+       (setq prodji-venv-directory venv-current-dir))))
   (setq flycheck-python-pylint-executable
-	(prodji-concat-path venv-current-dir venv-executables-dir "python"))
+	(prodji-concat-path prodji-venv-directory "bin" "python"))
   (let ((settings (prodji-dot-env-get "DJANGO_SETTINGS_MODULE")))
     (when settings
       (setenv "DJANGO_SETTINGS_MODULE" settings))))
@@ -202,8 +262,11 @@ already active, stop its processes and kill their buffers."
       (prodji-teardown-shell)
       (call-interactively 'prodji-kill-project-buffers)
       (setq prodji-project-root nil
+	    prodji-venv-name nil
+	    prodji-venv-directory nil
 	    flycheck-python-pylint-executable "python")
-      (venv-deactivate))))
+      (when (eq prodji-virtual-env-manager 'virtualenvwrapper)
+	(venv-deactivate)))))
 
 (defun prodji-kill-project-buffers ()
   (interactive)
@@ -226,13 +289,16 @@ already active, stop its processes and kill their buffers."
 			  `((reporter
 			     (make-progress-reporter
 			      (format "Stopping %s..." ,buffer))))))
-	 (when ,sentinel-not-nil
-	   (set-process-sentinel process
-				 (lambda (proc output)
-				   (,sentinel proc output)
-				   (when ,show-progress
-				     (progress-reporter-done reporter)))))
-	 (with-current-buffer ,buffer ,@how)
+	 (if process
+	     (progn
+	       (when ,sentinel-not-nil
+		 (set-process-sentinel process
+				       (lambda (proc output)
+					 (,sentinel proc output)
+					 (when ,show-progress
+					   (progress-reporter-done reporter)))))
+	       (with-current-buffer ,buffer ,@how))
+	   (kill-buffer ,buffer))
 	 (setq ,buffer nil)))))
 
 (defun prodji--kill-buffer-when-finished (proc output)
@@ -267,36 +333,52 @@ already active, stop its processes and kill their buffers."
   (let ((shell-buffer (vterm (format "*shell-%s*" venv-current-name))))
     (setq prodji-shell-buffer shell-buffer)))
 
-(defun prodji-start-docker-process (working-directory)
-  (let ((docker-buffer (get-buffer-create (format "*docker-%s*" venv-current-name))))
+(defun prodji--virtualenvwrapper-start-docker-process (working-directory)
+  (let ((docker-buffer (get-buffer-create (format "*docker-%s*" prodji-venv-name))))
     (with-current-buffer docker-buffer
       (cd working-directory)
       (let ((args (append (split-string-shell-command prodji-docker-compose-executable)
 			  '("up" "--no-color"))))
 	(apply 'start-file-process
-	       (format "docker-compose:%s" venv-current-name)
+	       (format "docker-compose:%s" prodji-venv-name)
 	       docker-buffer
 	       args))
       (prodji-docker-mode))
     docker-buffer))
 
-(defun prodji-get-python-executable ()
-  (prodji-concat-path
-   venv-current-dir
-   venv-executables-dir
-   "python"))
+(defun prodji--poetry-start-docker-process (working-directory)
+  (let ((docker-buffer (get-buffer-create (format "*docker-%s*" prodji-venv-name))))
+    (with-current-buffer docker-buffer
+      (cd working-directory)
+      (comint-mode)
+      (call-process-shell-command (prodji-docker-command "up -d") nil nil nil)
+      (let* ((command '("docker-compose"
+			"exec"
+			"--"
+			"web"
+			"/venv/bin/honcho"
+			"start"
+			"-f"
+			"/app/docker/Procfile"))
+	     (process
+	      (start-process-shell-command
+	       (format "docker-compose:%s" prodji-venv-name)
+	       docker-buffer
+	       (string-join command " "))))
+	(set-process-filter process 'comint-output-filter)))
+    docker-buffer))
 
 (defun prodji-dot-env-get (var-name)
   "Get the value of VAR-NAME from project-root/.env or nil."
   (let ((dot-env-file (prodji-concat-path prodji-project-root ".env")))
-    (when (not (file-readable-p dot-env-file))
-      (error "File not readable: %s" (prodji-concat-path prodji-project-root ".env")))
-    (with-temp-buffer
-      (insert-file-contents dot-env-file)
-      (goto-char (point-min))
-      (if (search-forward-regexp (concat "^" var-name "="))
-	  (buffer-substring-no-properties (point) (line-end-position))
-	nil))))
+    (if (file-readable-p dot-env-file)
+	(with-temp-buffer
+	  (insert-file-contents dot-env-file)
+	  (goto-char (point-min))
+	  (if (search-forward-regexp (concat "^" var-name "="))
+	      (buffer-substring-no-properties (point) (line-end-position))
+	    nil))
+      nil)))
 
 (defun prodji-start-django-server (working-directory)
   "Start a django dev server process in WORKING-DIRECTORY.
