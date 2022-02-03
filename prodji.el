@@ -78,6 +78,9 @@
 
 (defvar prodji-venv-directory nil)
 
+(defvar prodji-virtual-env-manager 'poetry
+  "Method used for management of virtual environments.")
+
 (defcustom prodji-project-directory (expand-file-name "~/projects")
   "Directory containing the user's projects"
   :type '(string))
@@ -85,11 +88,6 @@
 (defcustom prodji-poetry-virtual-env-dir (expand-file-name "~/.cache/pypoetry/virtualenvs")
   "Directory that contains python virtual environment directories."
   :type '(string))
-
-(defcustom prodji-virtual-env-manager 'poetry
-  "Method used for management of virtual environments."
-  :type '(symbol)
-  :options '(poetry virtualenvwrapper))
 
 (defcustom prodji-create-pyright-config nil
   "Whether a pyrightconfig.json file should be created.
@@ -117,7 +115,7 @@ Borrowed from emacs git as not available in 27."
     (let ((comint-file-name-quote-list shell-file-name-quote-list))
       (car (shell--parse-pcomplete-arguments)))))
 
-(defun prodji-docker-command (action)
+(defun prodji--docker-command (action)
   (string-join `(,prodji-docker-compose-executable ,action) " "))
 
 (defun prodji-concat-path (&rest parts)
@@ -143,7 +141,17 @@ e.g. (prodji-concat-path \"/etc\" \"nginx.conf.d\") -> \"/etc/nginx.conf.d\""
 		  "Project venv: ")))
     (completing-read prompt choices nil t nil)))
 
-(defun prodji ()
+(defun prodji-poetry ()
+  (interactive)
+  (setq prodji-virtual-env-manager 'poetry)
+  (--prodji #'prodji-poetry-read-name))
+
+(defun prodji-virtualenvwrapper ()
+  (interactive)
+  (setq prodji-virtual-env-manager 'virtualenvwrapper)
+  (--prodji #'prodji-virtualenvwrapper-read-name))
+
+(defun --prodji (venv-read-name-function)
   "Start work on a Django project.
 
 Requires a Python virtual environment created with
@@ -238,21 +246,33 @@ already active, stop its processes and kill their buffers."
 				   :type 'shell-process)))
 	(t (user-error "Need docker-compose.yml or .env to run server process"))))
 
+(defun prodji--get-venv-directory ()
+  "Use this in place of `lsp-pylsp-get-pyenv-environment' with `advice-add'.
+
+Using a named function means we can also `advice-remove' when
+we're done."
+  prodji-venv-directory)
+
 (defun prodji-activate-venv (venv-name)
   (setq prodji-venv-name venv-name)
   (pcase prodji-virtual-env-manager
-    ('poetry
-     (setq prodji-venv-directory
-	   (prodji-concat-path prodji-poetry-virtual-env-dir venv-name)))
-    ('virtualenvwrapper
-     (progn
-       (venv-workon venv-name)
-       (setq prodji-venv-directory venv-current-dir))))
+    ('poetry (setq prodji-venv-directory
+		   (prodji-concat-path prodji-poetry-virtual-env-dir venv-name)))
+    ('virtualenvwrapper (progn
+			  (venv-workon venv-name)
+			  (setq prodji-venv-directory venv-current-dir))))
   (setq flycheck-python-pylint-executable
 	(prodji-concat-path prodji-venv-directory "bin" "python"))
-  (let ((settings (prodji-dot-env-get "DJANGO_SETTINGS_MODULE")))
-    (when settings
-      (setenv "DJANGO_SETTINGS_MODULE" settings))))
+
+  ;; lsp-mode calls `lsp-pylsp-get-pyenv-environment' on startup to
+  ;; get the env which it passes to jedi, which jedi uses for lookups.
+  ;; By bypassing this, we can use whatever env we've found here.
+  (advice-add
+   'lsp-pylsp-get-pyenv-environment
+   :override
+   #'prodji--get-venv-directory)
+  (when-let ((settings (prodji-dot-env-get "DJANGO_SETTINGS_MODULE")))
+    (setenv "DJANGO_SETTINGS_MODULE" settings)))
 
 (defun prodji-killall ()
   (interactive)
@@ -265,6 +285,7 @@ already active, stop its processes and kill their buffers."
 	    prodji-venv-name nil
 	    prodji-venv-directory nil
 	    flycheck-python-pylint-executable "python")
+      (advice-remove 'lsp-pylsp-get-pyenv-environment #'prodji--get-venv-directory)
       (when (eq prodji-virtual-env-manager 'virtualenvwrapper)
 	(venv-deactivate)))))
 
@@ -319,7 +340,7 @@ already active, stop its processes and kill their buffers."
     (prodji--teardown-process
       (buf :show-progress t
 	   :sentinel prodji--kill-buffer-when-finished)
-      (call-process-shell-command (prodji-docker-command "stop") nil nil nil)
+      (call-process-shell-command (prodji--docker-command "stop") nil nil nil)
       (setq prodji-server-process-buffer nil))))
 
 (defun prodji-teardown-django-server (&optional preserve-buffer)
@@ -353,7 +374,7 @@ already active, stop its processes and kill their buffers."
     (with-current-buffer docker-buffer
       (cd working-directory)
       (comint-mode)
-      (call-process-shell-command (prodji-docker-command "up -d") nil nil nil)
+      (call-process-shell-command (prodji--docker-command "up -d") nil nil nil)
       (let* ((command '("docker-compose"
 			"exec"
 			"--"
