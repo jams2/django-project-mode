@@ -220,7 +220,7 @@ already active, stop its processes and kill their buffers."
 	 (server-buffer (prodji-server-buffer
 			 (prodji-start-docker-or-django project-root))))
     (prodji--maybe-write-pyright-config project-root venv-name)
-    (prodji-start-shell-process)
+    (prodji-start-shell-process project-root venv-name)
     (setq prodji-project-root project-root)
     (when server-buffer (pop-to-buffer server-buffer))))
 
@@ -243,7 +243,7 @@ already active, stop its processes and kill their buffers."
   (pcase prodji-virtual-env-manager
     ('poetry
      (setq prodji-venv-directory
-	   (prodji-concat-path prodji-venv-directory venv-name)))
+	   (prodji-concat-path prodji-poetry-virtual-env-dir venv-name)))
     ('virtualenvwrapper
      (progn
        (venv-workon venv-name)
@@ -329,9 +329,11 @@ already active, stop its processes and kill their buffers."
       (interrupt-process (get-buffer-process buf))
       (setq prodji-server-process-buffer nil))))
 
-(defun prodji-start-shell-process ()
-  (let ((shell-buffer (vterm (format "*shell-%s*" venv-current-name))))
-    (setq prodji-shell-buffer shell-buffer)))
+(defun prodji-start-shell-process (project-root venv-name)
+  (with-temp-buffer
+    (cd project-root)
+    (let ((shell-buffer (vterm (format "*shell-%s*" venv-name))))
+      (setq prodji-shell-buffer shell-buffer))))
 
 (defun prodji--virtualenvwrapper-start-docker-process (working-directory)
   (let ((docker-buffer (get-buffer-create (format "*docker-%s*" prodji-venv-name))))
@@ -440,7 +442,7 @@ Returns names of .py files in **/management/commands/."
   (let* ((command (completing-read
 		   "Command: "
 		   (append
-		    (prodji-find-management-commands-from-dir venv-current-dir)
+		    (prodji-find-management-commands-from-dir prodji-venv-directory)
 		    (prodji-find-management-commands-from-dir prodji-project-root))))
 	 (buf (get-buffer-create "*prodji-management-command*"))
 	 (program (append (prodji--get-management-command-prefix)
