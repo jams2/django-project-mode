@@ -81,7 +81,7 @@
 (defvar prodji-virtual-env-manager 'poetry
   "Method used for management of virtual environments.")
 
-(defcustom prodji-run-server nil
+(defcustom prodji-should-run-server nil
   "Whether or not prodji should run the project's development server."
   :type '(boolean))
 
@@ -128,6 +128,19 @@ Borrowed from emacs git as not available in 27."
 e.g. (prodji-concat-path \"/etc\" \"nginx.conf.d\") -> \"/etc/nginx.conf.d\""
   (cl-reduce (lambda (a b) (expand-file-name b a)) parts))
 
+(defmacro prodji--with-default-directory (directory &rest body)
+  (declare (indent 1))
+  `(let ((default-directory (or (and ,directory
+				     (file-name-as-directory ,directory))
+				default-directory)))
+     ,@body))
+
+(defun prodji-run-python ()
+  "Run an interactive Python shell from the project root."
+  (interactive)
+  (prodji--with-default-directory prodji-project-root
+    (run-python)))
+
 (defun prodji-virtualenvwrapper-read-name ()
   "Get the venv name using virtualenvwrapper."
   (venv-read-name
@@ -147,7 +160,7 @@ e.g. (prodji-concat-path \"/etc\" \"nginx.conf.d\") -> \"/etc/nginx.conf.d\""
 
 (defun prodji-poetry-select-project ()
   (let* ((current-project (when prodji-project-root
-			   (car (last (split-string prodji-project-root "/")))))
+			    (car (last (split-string prodji-project-root "/")))))
 	 (prompt (if current-project
 		     (format "Project (currently %s): " current-project)
 		   "Project: "))
@@ -155,8 +168,7 @@ e.g. (prodji-concat-path \"/etc\" \"nginx.conf.d\") -> \"/etc/nginx.conf.d\""
 			    (read-file-name prompt prodji-project-directory nil t "."))
 			   (user-error "prodji: must select a project to proceed"))))
     (setq prodji-project-root project-path)
-    (with-temp-buffer
-      (cd project-path)
+    (prodji--with-default-directory project-path
       (if-let ((venv-path (shell-command-to-string "poetry env info --path")))
 	  (car (last (split-string (string-trim venv-path) "/")))
 	(user-error "prodji: no poetry venv found")))))
@@ -243,7 +255,7 @@ already active, stop its processes and kill their buffers."
 				  #'prodji--project-root-from-virtualenvwrapper
 				#'prodji--project-root-from-var))
 	 (project-root (funcall project-root-getter))
-	 (server-buffer (when prodji-run-server
+	 (server-buffer (when prodji-should-run-server
 			  (prodji-server-buffer
 			   (prodji-start-docker-or-django project-root)))))
     (prodji--maybe-write-pyright-config project-root venv-name)
@@ -391,8 +403,7 @@ we're done."
       (setq prodji-server-process-buffer nil))))
 
 (defun prodji-start-shell-process (project-root venv-name)
-  (with-temp-buffer
-    (cd project-root)
+  (prodji--with-default-directory project-root
     (let ((shell-buffer (vterm (format "*shell-%s*" venv-name))))
       (setq prodji-shell-buffer shell-buffer))))
 
@@ -493,9 +504,7 @@ Returns names of .py files in **/management/commands/."
   (let* ((find-query
 	  "-path '*/management/commands/*.py' -not -name '__init__.py' -exec basename {} .py \\;")
 	 (command (string-join `("find" ,dir ,find-query) " ")))
-    (with-temp-buffer
-      (shell-command command t)
-      (split-string (buffer-string)))))
+    (split-string (shell-command-to-string command))))
 
 (defun prodji-run-django-command ()
   (interactive)
