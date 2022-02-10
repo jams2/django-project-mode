@@ -106,7 +106,15 @@ root, if it does not exist."
 Older versions use a `docker-compose' executable."
   :type '(string))
 
-(cl-defstruct prodji-server type buffer)
+;;; Types
+
+(cl-defstruct prodji-server
+  "Struct pairing a buffer with a tag denoting the server type.
+
+Server type should be 'docker' or 'shell-process'."
+  type buffer)
+
+;;; Helpers
 
 (defun split-string-shell-command (string)
   "Split STRING (a shell command) into a list of strings.
@@ -491,11 +499,32 @@ Attempt to read a DJANGO_SETTINGS_MODULE value from project-root/.env"
   (pop-to-buffer-same-window
    (prodji-start-docker-or-django prodji-project-root)))
 
+(defun prodji--infer-server-type ()
+  "Infer what type of server the project requires.
+
+As we don't always run the server, we can't rely on checking the
+`prodji-server-type' of `prodji-server-process-buffer'. Check for
+existence of docker-compose.yml or .env files."
+  (cond ((file-readable-p
+	  (prodji-concat-path prodji-project-root "docker-compose.yml"))
+	 'docker)
+	((file-readable-p
+	  (prodji-concat-path prodji-project-root ".env"))
+	 'shell-process)
+	(t (user-error "prodji couldn't infer server type"))))
+
 (defun prodji--get-management-command-prefix ()
-  (or (and (eq (prodji-server-type prodji-server-process-buffer) 'docker)
-	   (append (split-string-shell-command prodji-docker-compose-executable)
-		   '("run" "--rm" "web")))
-      '()))
+  "Get the management command prefix, as a list of strings."
+  (let ((docker-compose-prefix (append
+				(split-string-shell-command prodji-docker-compose-executable)
+				'("run" "--rm" "web"))))
+      (if prodji-server-process-buffer
+	  (or (and (eq (prodji-server-type prodji-server-process-buffer) 'docker)
+		   docker-compose-prefix)
+	      '())
+	(pcase (prodji--infer-server-type)
+	  ('docker docker-compose-prefix)
+	  ('shell-process '())))))
 
 (defun prodji-find-management-commands-from-dir (dir)
   "Find Django management commands, searching from DIR.
@@ -515,7 +544,7 @@ Returns names of .py files in **/management/commands/."
 		   (append
 		    (prodji-find-management-commands-from-dir prodji-venv-directory)
 		    (prodji-find-management-commands-from-dir prodji-project-root))))
-	 (buf (get-buffer-create "*prodji-management-command*"))
+	 (buf (generate-new-buffer (concat "*prodji:" command "*")))
 	 (program (append (prodji--get-management-command-prefix)
 			  '("python" "manage.py")
 			  (split-string-shell-command command))))
