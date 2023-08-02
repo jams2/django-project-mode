@@ -5,7 +5,7 @@
 ;; Author: Joshua Munn <public@elysee-munn.family>
 ;; URL: https://github.com/jams2/prodji/
 ;; Version: 0.1.0
-;; Package-Requires: (virtualenvwrapper cl-lib vterm shell subr-x comint)
+;; Package-Requires: (virtualenvwrapper cl-lib vterm)
 ;; Keywords: tools, processes
 
 ;; This file is not part of GNU Emacs.
@@ -352,7 +352,7 @@ we're done."
 	(with-temp-buffer
 	  (insert-file-contents dot-env-file)
 	  (goto-char (point-min))
-	  (if (search-forward-regexp (concat "^" var-name "="))
+	  (if (search-forward-regexp (concat "^" var-name "=") nil t)
 	      (buffer-substring-no-properties (point) (line-end-position))
 	    nil))
       nil)))
